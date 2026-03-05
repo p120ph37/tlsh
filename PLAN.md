@@ -6,10 +6,12 @@ Implement a TLS 1.3 client in bash that can perform `s_client`-style
 connections. Target cipher suite: `TLS_AES_128_GCM_SHA256` with `x25519`
 key exchange.
 
-**Shell**: Bash 3.2+ (required for `/dev/tcp`, arrays, substring extraction)
+**Shell**: Intersection of bash 3.2+ and ksh93 features
 **Validation**: `shellcheck --shell=bash`
 **Data representation**: All binary data as hex strings internally
 **Build**: Concatenate source files, strip comments
+**Testing**: Unit tests with known test vectors, integration via `openssl s_server`,
+end-to-end via `lighttpd`
 
 
 ## Phase 1: Project Structure and Build System
@@ -99,11 +101,16 @@ key exchange.
 
 ## Phase 4: TLS Protocol
 
-### TCP Connection
-- [ ] `src/tcp.sh`
-  - Open connection via `/dev/tcp/host/port`
-  - Functions: `tcp_connect <host> <port>`, `tcp_send <hex>`, `tcp_recv <len>`
-  - Handle fd management
+### TCP Connection (Modular)
+- [ ] `src/net/tcp.sh` - Abstract TCP interface
+  - Functions: `tcp_connect <host> <port>`, `tcp_send <hex>`, `tcp_recv <len>`,
+    `tcp_close`
+  - Delegates to a backend selected at startup
+- [ ] `src/net/tcp_devtcp.sh` - `/dev/tcp` backend (bash/ksh93)
+  - Implements `_tcp_connect`, `_tcp_send_raw`, `_tcp_recv_raw` using
+    `/dev/tcp/host/port` redirection
+- [ ] `src/net/tcp_ztcp.sh` - zsh `ztcp` backend [future]
+- [ ] `src/net/tcp_nc.sh` - netcat/socat backend [future]
 
 ### TLS Record Layer
 - [ ] `src/tls_record.sh`
@@ -138,12 +145,33 @@ key exchange.
   - Display certificate info (optional)
 
 
-## Phase 5: Integration and Testing
+## Phase 5: Testing Strategy
 
-- [ ] End-to-end test against a real HTTPS server
-- [ ] Test against `openssl s_server` locally
-- [ ] Test against https://tls13.xargs.org/ test vectors if available
-- [ ] ShellCheck validation (`shellcheck --shell=bash`)
+### Unit Tests (per-module, against known test vectors)
+- [ ] `tests/test_hex.sh` - Hex encode/decode/xor/substr roundtrips
+- [ ] `tests/test_bytes.sh` - Integer conversion roundtrips
+- [ ] `tests/test_sha256.sh` - FIPS 180-4 vectors (empty, "abc", multi-block)
+- [ ] `tests/test_hmac.sh` - RFC 4231 test cases 1-4, 6-7
+- [ ] `tests/test_hkdf.sh` - RFC 5869 test cases 1-3 (SHA-256)
+- [ ] `tests/test_aes.sh` - FIPS 197 Appendix C + NIST SP 800-38A vectors
+- [ ] `tests/test_gcm.sh` - GCM spec test cases 1-4 (AES-128)
+- [ ] `tests/test_x25519.sh` - RFC 7748 Section 5.2 + 6.1 DH vectors
+- [ ] `tests/test_rsa.sh` - RSA-PSS verify against known signature
+
+### Integration Tests
+- [ ] `tests/test_integration.sh` - TLS handshake against `openssl s_server`
+  - Start `openssl s_server` with a self-signed cert
+  - Connect with `tlsh`, complete handshake, exchange data
+  - Verify data integrity
+
+### End-to-End Tests
+- [ ] `tests/test_e2e.sh` - Full HTTPS against `lighttpd`
+  - Start `lighttpd` with TLS enabled
+  - Perform HTTP GET via `tlsh s_client`
+  - Verify HTTP response body
+
+### Validation
+- [ ] ShellCheck: `shellcheck --shell=bash src/**/*.sh`
 - [ ] Performance benchmarking (informational)
 
 
@@ -161,23 +189,23 @@ The crypto primitives have no circular dependencies and can be implemented
 bottom-up:
 
 ```
-1. util/hex.sh, util/bytes.sh        (foundation)
-2. crypto/sha256.sh                   (needed by everything)
-3. crypto/hmac.sh                     (needs sha256)
-4. crypto/hkdf.sh                     (needs hmac)
-5. crypto/aes.sh                      (independent)
-6. crypto/gcm.sh                      (needs aes)
-7. util/bignum.sh                     (independent)
-8. crypto/x25519.sh                   (needs bignum)
-9. crypto/rsa.sh                      (needs bignum, sha256)
-10. tcp.sh                            (independent)
-11. tls_record.sh                     (needs gcm, tcp)
-12. tls_handshake.sh                  (needs everything)
-13. main.sh / s_client                (entry point)
+ 1. util/hex.sh, util/bytes.sh        (foundation)        -> test immediately
+ 2. crypto/sha256.sh                   (needed by everything) -> test vs FIPS vectors
+ 3. crypto/hmac.sh                     (needs sha256)      -> test vs RFC 4231
+ 4. crypto/hkdf.sh                     (needs hmac)        -> test vs RFC 5869
+ 5. crypto/aes.sh                      (independent)       -> test vs FIPS 197
+ 6. crypto/gcm.sh                      (needs aes)         -> test vs GCM spec
+ 7. util/bignum.sh                     (independent)       -> test basic ops
+ 8. crypto/x25519.sh                   (needs bignum)      -> test vs RFC 7748
+ 9. crypto/rsa.sh                      (needs bignum, sha256) -> test vs known sig
+10. net/tcp.sh + net/tcp_devtcp.sh     (independent)       -> test connectivity
+11. tls_record.sh                      (needs gcm, tcp)
+12. tls_handshake.sh                   (needs everything)
+13. main.sh / s_client                 (entry point)
 ```
 
-Each primitive can be tested independently with known test vectors before
-moving to the next.
+Each primitive is tested independently with known test vectors before moving
+to the next. This ensures bugs are caught at the lowest level.
 
 
 ## Risks and Mitigations
@@ -209,3 +237,14 @@ moving to the next.
 - Would allow POSIX sh compatibility
 - BUT: Violates the "no external commands" constraint. Also, `nc` variants
   differ across platforms and may not support the bidirectional streaming we need.
+- HOWEVER: The TCP layer is now modular, so an `nc` backend can be added
+  without changing any other code.
+
+### C Preprocessor for Portability [Future Work]
+- Could use `cc -E` (or `cpp`) as a build-time preprocessor step
+- `#ifdef NATIVE_ARRAYS` / `#else` blocks would allow shipping eval-based
+  array fallbacks for shells without native indexed arrays
+- This would open the door to dash/ash/POSIX sh compatibility (combined with
+  an `nc` TCP backend)
+- Not implemented now: adds complexity for marginal benefit. The bash/ksh93
+  target covers the vast majority of real-world systems.

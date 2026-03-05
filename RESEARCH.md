@@ -234,22 +234,59 @@ Shell variables cannot contain NUL (`\0`) bytes. This means:
 This is a fundamental limitation of all shells (bash, dash, zsh alike) and is
 why we adopt the **hex-string convention** throughout.
 
+### Refined Shell Compatibility: bash/ksh93 Intersection
+
+Rather than targeting bash-only, we target the **intersection of bash 3.2+
+and ksh93** features. This gives us compatibility with both shells and
+potentially others (though see caveats).
+
+| Feature                       | bash 3.2+ | ksh93 | In intersection? |
+|-------------------------------|-----------|-------|-----------------|
+| `/dev/tcp/host/port`          | Yes       | Yes   | Yes             |
+| `arr=(val val val)`           | Yes       | Yes   | Yes             |
+| `arr[i]=val` / `${arr[i]}`   | Yes       | Yes   | Yes             |
+| `${var:offset:length}`        | Yes       | Yes   | Yes             |
+| `$(( ))` with all bitwise ops | Yes       | Yes   | Yes             |
+| `(( ))` arithmetic command    | Yes       | Yes   | Yes             |
+| C-style `for ((i=0;i<n;i++))` | Yes      | Yes   | Yes             |
+| `local` keyword               | Yes      | Yes*  | Yes             |
+| `printf` builtin with `\xHH` | Yes       | Yes   | Yes             |
+| `read -n N`                   | Yes       | Yes   | Yes             |
+| `typeset -i`                  | Yes       | Yes   | Yes             |
+
+*ksh93 prefers `typeset` but `local` is accepted in ksh93u+m.
+
+**Features to avoid** (not in both shells):
+- `declare -n` namerefs (bash 4.3+ only; ksh93 has `typeset -n` with
+  different semantics)
+- `${!prefix*}` indirect expansion (different behavior in ksh93)
+- Floating-point arithmetic, compound variables (ksh93-only)
+
+**Other shells — NOT compatible:**
+
+| Shell | `/dev/tcp` | Arrays | Notes                            |
+|-------|-----------|--------|----------------------------------|
+| zsh   | No        | Yes    | Has `ztcp` module instead        |
+| mksh  | No        | Yes    | Missing `/dev/tcp`               |
+| dash  | No        | No     | Missing both critical features   |
+| fish  | No        | N/A    | Completely different syntax       |
+
+To support zsh in the future, we keep the TCP layer modular: the network
+backend is in `src/net/` and can be swapped (e.g., a `ztcp`-based backend).
+
+For shells lacking arrays, `eval`-based indirection could emulate indexed
+arrays (e.g., `eval "arr_${i}=\$val"`). A C preprocessor step with `#ifdef`
+could conditionally include such fallbacks. This is noted for future work.
+
 ### Final Shell Choice
 
-**Bash (version 3.2+)** is the minimum viable shell because it provides:
-1. `/dev/tcp` for network I/O (not available in POSIX sh)
-2. Indexed arrays for crypto state (not available in POSIX sh)
-3. `${var:offset:length}` substring extraction (not available in POSIX sh)
-4. POSIX-compatible `$(( ))` arithmetic with bitwise operators
-5. `printf` builtin with `\xHH` hex escapes
-6. `local` variables for function scoping
-7. `read -n` for reading specific byte counts from network
+**Bash 3.2+ / ksh93** intersection. This covers:
+- macOS (bash 3.2 ships by default)
+- All Linux distributions (bash 4.x/5.x)
+- Commercial Unix (AIX, Solaris/illumos, HP-UX via ksh93)
+- WSL, Git Bash on Windows
 
-Bash 3.2 (2006) is the version shipped with macOS and is available on
-essentially all Linux/Unix systems. This is a reasonable minimum.
-
-We will **not** be able to pass `shellcheck --shell=sh` but we **can** use
-`shellcheck --shell=bash` for validation.
+We validate with `shellcheck --shell=bash`.
 
 
 ## 4. TLS 1.3 Protocol Details
@@ -344,7 +381,109 @@ starts at 0 and increments for each record.
 - **RFC 5869 (HKDF)**: https://datatracker.ietf.org/doc/html/rfc5869
 
 
-## 5. Performance Considerations
+## 5. Reference Test Vectors
+
+All test vectors are in hexadecimal. These are used for unit testing each
+cryptographic primitive independently.
+
+### SHA-256 (FIPS 180-4 / di-mgt.com.au)
+
+| # | Input (hex)      | Input (ASCII)  | Expected SHA-256 Output                                          |
+|---|------------------|----------------|------------------------------------------------------------------|
+| 1 | *(empty)*        | ""             | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| 2 | `616263`         | "abc"          | `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad` |
+| 3 | 56-byte string   | "abcdbcde..."  | `248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1` |
+
+### HMAC-SHA-256 (RFC 4231)
+
+| # | Key (hex)                                  | Data (hex)                                                           | HMAC-SHA-256                                                      |
+|---|--------------------------------------------|----------------------------------------------------------------------|-------------------------------------------------------------------|
+| 1 | `0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b`| `4869205468657265`                                                   | `b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7` |
+| 2 | `4a656665`                                 | `7768617420646f2079612077616e7420666f72206e6f7468696e673f`           | `5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843` |
+| 3 | `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`  | 50 bytes of `0xdd`                                                   | `773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe` |
+| 4 | `0102030405060708090a0b0c0d0e0f10111213141516171819` | 50 bytes of `0xcd`                                    | `82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b` |
+
+### HKDF-SHA-256 (RFC 5869)
+
+**Test Case 1:**
+- IKM: `0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b` (22 bytes)
+- salt: `000102030405060708090a0b0c` (13 bytes)
+- info: `f0f1f2f3f4f5f6f7f8f9` (10 bytes)
+- L: 42
+- PRK: `077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5`
+- OKM: `3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865`
+
+**Test Case 2:**
+- IKM: 80 bytes (`000102...4f`)
+- salt: 80 bytes (`606162...af`)
+- info: 80 bytes (`b0b1b2...ff`)
+- L: 82
+- PRK: `06a6b88c5853361a06104c9ceb35b45cef760014904671014a193f40c15fc244`
+- OKM: `b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87`
+
+### AES-128 ECB (FIPS 197 Appendix C)
+
+| Key                                | Plaintext                          | Ciphertext                         |
+|------------------------------------|------------------------------------|------------------------------------|
+| `000102030405060708090a0b0c0d0e0f` | `00112233445566778899aabbccddeeff` | `69c4e0d86a7b0430d8cdb78070b4c55a` |
+
+Additional (NIST SP 800-38A):
+
+| Key                                | Plaintext                          | Ciphertext                         |
+|------------------------------------|------------------------------------|------------------------------------|
+| `2b7e151628aed2a6abf7158809cf4f3c` | `6bc1bee22e409f96e93d7e117393172a` | `3ad77bb40d7a3660a89ecaf32466ef97` |
+| `2b7e151628aed2a6abf7158809cf4f3c` | `ae2d8a571e03ac9c9eb76fac45af8e51` | `f5d3d58503b9699de785895a96fdbaaf` |
+
+### AES-128-GCM (GCM Spec Appendix B, McGrew & Viega)
+
+Test vectors from the GCM specification. See the full spec PDF for all cases:
+https://csrc.nist.rip/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-spec.pdf
+
+**Test Case 1** (empty plaintext, no AAD):
+- Key: `00000000000000000000000000000000`
+- IV: `000000000000000000000000`
+- PT: *(empty)*
+- AAD: *(empty)*
+- CT: *(empty)*
+- Tag: `58e2fccefa7e3061367f1d57a4e7455a`
+
+**Test Case 2** (128-bit plaintext, no AAD):
+- Key: `00000000000000000000000000000000`
+- IV: `000000000000000000000000`
+- PT: `00000000000000000000000000000000`
+- AAD: *(empty)*
+- CT: `0388dace60b6a392f328c2b971b2fe78`
+- Tag: `ab6e47d42cec13bdf53a67b21257bddf`
+
+### X25519 (RFC 7748 Section 5.2 and 6.1)
+
+**Test Vector 1:**
+- Scalar: `a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4`
+- u-coordinate: `e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c`
+- Output: `c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552`
+
+**DH Test (Section 6.1):**
+- Alice private: `77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a`
+- Alice public (X25519(a, 9)): `8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a`
+- Bob private: `5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb`
+- Bob public (X25519(b, 9)): `de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f`
+- Shared secret: `4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742`
+
+**Iterated Test** (scalar = u = basepoint 9):
+- After 1 iteration: `422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079`
+- After 1000 iterations: `684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51`
+
+### Test Vector Sources
+
+- SHA-256: https://di-mgt.com.au/sha_testvectors.html
+- HMAC-SHA-256: https://www.rfc-editor.org/rfc/rfc4231.html
+- HKDF: https://datatracker.ietf.org/doc/html/rfc5869
+- AES-128: FIPS 197, NIST SP 800-38A
+- AES-GCM: https://csrc.nist.rip/groups/ST/toolkit/BCM/documents/proposedmodes/gcm/gcm-spec.pdf
+- X25519: https://www.rfc-editor.org/rfc/rfc7748.html
+
+
+## 6. Performance Considerations
 
 Shell arithmetic operates on string-represented integers with conversion
 overhead on every operation. Rough estimates for key operations:
