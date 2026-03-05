@@ -18,6 +18,8 @@ SOURCE_FILES=(
     "$SRCDIR/crypto/hkdf.sh"
     "$SRCDIR/crypto/aes.sh"
     "$SRCDIR/crypto/gcm.sh"
+    "$SRCDIR/crypto/x25519.sh"
+    "$SRCDIR/crypto/rsa.sh"
     "$SRCDIR/net/tcp.sh"
     "$SRCDIR/net/tcp_devtcp.sh"
     "$SRCDIR/tls_record.sh"

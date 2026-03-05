@@ -17,14 +17,16 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_TLSH_DIR/crypto/hkdf.sh"
 . "$_TLSH_DIR/crypto/aes.sh"
 . "$_TLSH_DIR/crypto/gcm.sh"
+. "$_TLSH_DIR/crypto/x25519.sh"
+. "$_TLSH_DIR/crypto/rsa.sh"
 
 # Source network modules
 . "$_TLSH_DIR/net/tcp.sh"
 . "$_TLSH_DIR/net/tcp_devtcp.sh"
 
-# Source TLS protocol modules (when they exist)
-# . "$_TLSH_DIR/tls_record.sh"
-# . "$_TLSH_DIR/tls_handshake.sh"
+# Source TLS protocol modules
+. "$_TLSH_DIR/tls_record.sh"
+. "$_TLSH_DIR/tls_handshake.sh"
 
 # s_client - TLS client (equivalent to openssl s_client)
 # Usage: s_client -connect host:port
@@ -57,8 +59,32 @@ s_client() {
     tcp_connect "$host" "$port"
     printf 'Connected.\n' >&2
 
-    # TODO: TLS handshake
-    printf 'TLS handshake not yet implemented.\n' >&2
+    # Perform TLS 1.3 handshake
+    if ! tls_handshake "$host"; then
+        printf 'TLS handshake failed.\n' >&2
+        tcp_close
+        return 1
+    fi
+
+    # Interactive mode: read from stdin, send to server
+    # Also read from server and print to stdout
+    printf 'TLS connection established. Type to send data.\n' >&2
+
+    # Simple loop: read a line, send it, receive response
+    local line
+    while IFS= read -r line; do
+        local line_hex
+        line_hex=$(ascii_to_hex "${line}")
+        # Add CRLF
+        line_hex="${line_hex}0d0a"
+        tls_send "$line_hex"
+
+        # Try to receive response
+        if tls_recv; then
+            hex_to_ascii "$_tls_recv_payload"
+            printf '\n'
+        fi
+    done
 
     tcp_close
 }
