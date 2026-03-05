@@ -102,7 +102,7 @@ _tls_build_client_hello() {
     extensions="${extensions}$(uint16_to_hex $_TLS_EXT_SIGNATURE_ALGORITHMS)$(uint16_to_hex "$sig_len")${sig_algos}"
 
     # Supported Versions extension (TLS 1.3 = 0x0304)
-    local sup_ver="010304"  # length=1 byte, version=0x0304
+    local sup_ver="020304"  # list_length=2 bytes, version=0x0304
     local sup_ver_len=$(( ${#sup_ver} / 2 ))
     extensions="${extensions}$(uint16_to_hex $_TLS_EXT_SUPPORTED_VERSIONS)$(uint16_to_hex "$sup_ver_len")${sup_ver}"
 
@@ -466,6 +466,12 @@ tls_handshake() {
     while [ $server_finished_received -eq 0 ]; do
         tls_record_recv || return 1
 
+        # Skip ChangeCipherSpec (middlebox compatibility, RFC 8446 section 5)
+        if [ "$_tls_recv_ct" -eq $TLS_CT_CHANGE_CIPHER ]; then
+            printf 'TLS: skipping ChangeCipherSpec (middlebox compat)\n' >&2
+            continue
+        fi
+
         if [ "$_tls_recv_ct" -ne $TLS_CT_HANDSHAKE ]; then
             printf 'ERROR: expected handshake in encrypted records, got %d\n' "$_tls_recv_ct" >&2
             return 1
@@ -529,6 +535,18 @@ tls_handshake() {
         done
     done
 
+    printf 'TLS: deriving application keys...\n' >&2
+
+    # Derive application traffic keys
+    # App keys use transcript hash up to and including server Finished (NOT client Finished)
+    local derived2
+    derived2=$(hkdf_expand_label "$handshake_secret" "derived" "$empty_hash" 32)
+    local master_secret
+    master_secret=$(hkdf_extract "$derived2" "$zero_key")
+
+    local app_hash
+    app_hash=$(_tls_transcript_hash)
+
     printf 'TLS: sending client Finished...\n' >&2
 
     # Send client Finished
@@ -541,17 +559,6 @@ tls_handshake() {
     local client_finished_msg="$(uint8_to_hex $_TLS_HT_FINISHED)$(uint24_to_hex 32)${client_verify_data}"
     _tls_transcript="${_tls_transcript}${client_finished_msg}"
     tls_record_send $TLS_CT_HANDSHAKE "$client_finished_msg"
-
-    printf 'TLS: deriving application keys...\n' >&2
-
-    # Derive application traffic keys
-    local derived2
-    derived2=$(hkdf_expand_label "$handshake_secret" "derived" "$empty_hash" 32)
-    local master_secret
-    master_secret=$(hkdf_extract "$derived2" "$zero_key")
-
-    local app_hash
-    app_hash=$(_tls_transcript_hash)
     local client_app_secret
     client_app_secret=$(hkdf_expand_label "$master_secret" "c ap traffic" "$app_hash" 32)
     local server_app_secret
@@ -582,14 +589,18 @@ tls_send() {
 # tls_recv - Receive application data
 # Sets _tls_recv_payload to the received data (hex)
 tls_recv() {
-    tls_record_recv
-    while [ "$_tls_recv_ct" -ne $TLS_CT_APPLICATION_DATA ]; do
-        if [ "$_tls_recv_ct" -eq $TLS_CT_ALERT ]; then
+    while true; do
+        tls_record_recv || return 1
+        if [ "$_tls_recv_ct" -eq $TLS_CT_APPLICATION_DATA ]; then
+            return 0
+        elif [ "$_tls_recv_ct" -eq $TLS_CT_ALERT ]; then
             local alert_level=$((16#${_tls_recv_payload:0:2}))
             local alert_desc=$((16#${_tls_recv_payload:2:2}))
             printf 'TLS ALERT: level=%d desc=%d\n' "$alert_level" "$alert_desc" >&2
             if [ $alert_level -eq 2 ]; then return 1; fi
+        elif [ "$_tls_recv_ct" -eq $TLS_CT_HANDSHAKE ]; then
+            # Post-handshake messages (e.g. NewSessionTicket) - skip
+            printf 'TLS: skipping post-handshake message\n' >&2
         fi
-        tls_record_recv || return 1
     done
 }
