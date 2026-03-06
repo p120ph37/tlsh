@@ -10,6 +10,7 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source utility modules
 . "$_TLSH_DIR/util/hex.sh"
 . "$_TLSH_DIR/util/bytes.sh"
+. "$_TLSH_DIR/util/jit.sh"
 
 # Source crypto modules
 . "$_TLSH_DIR/crypto/sha256.sh"
@@ -28,6 +29,9 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source TLS protocol modules
 . "$_TLSH_DIR/tls_record.sh"
 . "$_TLSH_DIR/tls_handshake.sh"
+
+# JIT-optimize hot functions: replace subshell calls with inline printf -v
+_jit_inline hkdf_expand_label _tls_build_client_hello
 
 # s_client - TLS client (equivalent to openssl s_client)
 # Usage: s_client -connect host:port
