@@ -584,8 +584,27 @@ _jit_inline_one() {
                 [ $best_pos -eq 999999 ] && break
 
                 found_any=1
-                local arg="${best_aft%%)*}"
-                remaining="${best_aft#*)}"
+                # Find matching close paren, accounting for nested $((...))
+                local arg=""
+                remaining="$best_aft"
+                local _pdepth=1
+                while [ $_pdepth -gt 0 ] && [ -n "$remaining" ]; do
+                    local _ch="${remaining:0:1}"
+                    remaining="${remaining:1}"
+                    case "$_ch" in
+                        "(")
+                            _pdepth=$((_pdepth + 1))
+                            arg="${arg}("
+                            ;;
+                        ")")
+                            _pdepth=$((_pdepth - 1))
+                            [ $_pdepth -gt 0 ] && arg="${arg})"
+                            ;;
+                        *)
+                            arg="${arg}${_ch}"
+                            ;;
+                    esac
+                done
 
                 _jit_next_uid
                 local tmpvar="_jv${_jit_cur_uid}"

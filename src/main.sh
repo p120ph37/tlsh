@@ -34,7 +34,7 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _jit_mark_inlinable uint8_to_hex uint16_to_hex uint24_to_hex uint32_to_hex ascii_to_hex
 
 # JIT-optimize hot functions: inline registered callees + $(printf) elimination
-_jit_inline hkdf_expand_label _tls_build_client_hello
+_jit_inline hkdf_expand_label _tls_build_client_hello hmac_sha256 hex_xor hkdf_expand
 
 # s_client - TLS client (equivalent to openssl s_client)
 # Usage: s_client -connect host:port
