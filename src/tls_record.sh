@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tls_record.sh - TLS 1.3 record layer
 # Handles record framing, encryption, and decryption.
-# Requires: hex.sh, bytes.sh, gcm.sh
+# Requires: hex.sh, bytes.sh, gcm.sh, chacha20poly1305.sh
 
 # TLS content types
 TLS_CT_CHANGE_CIPHER=20
@@ -72,9 +72,13 @@ tls_record_send() {
         local ct_len=$((inner_len + 16))  # ciphertext + 16-byte tag
         local aad="$(uint8_to_hex $TLS_CT_APPLICATION_DATA)${TLS_RECORD_VERSION}$(uint16_to_hex "$ct_len")"
 
-        # Encrypt
+        # Encrypt using selected cipher suite
         local result
-        result=$(gcm_encrypt "$_tls_write_key" "$nonce" "$inner_plaintext" "$aad")
+        if [ "${_tls_cipher_suite:-0}" -eq "${_TLS_CS_CHACHA20_POLY1305_SHA256:-0}" ]; then
+            result=$(chacha20poly1305_encrypt "$_tls_write_key" "$nonce" "$inner_plaintext" "$aad")
+        else
+            result=$(gcm_encrypt "$_tls_write_key" "$nonce" "$inner_plaintext" "$aad")
+        fi
         local ciphertext="${result%% *}"
         local tag="${result##* }"
 
@@ -118,9 +122,13 @@ tls_record_recv() {
         local nonce
         nonce=$(_tls_make_nonce "$_tls_read_iv" "$_tls_read_seq")
 
-        # Decrypt
+        # Decrypt using selected cipher suite
         local plaintext
-        plaintext=$(gcm_decrypt "$_tls_read_key" "$nonce" "$ciphertext" "$aad" "$tag")
+        if [ "${_tls_cipher_suite:-0}" -eq "${_TLS_CS_CHACHA20_POLY1305_SHA256:-0}" ]; then
+            plaintext=$(chacha20poly1305_decrypt "$_tls_read_key" "$nonce" "$ciphertext" "$aad" "$tag")
+        else
+            plaintext=$(gcm_decrypt "$_tls_read_key" "$nonce" "$ciphertext" "$aad" "$tag")
+        fi
         if [ $? -ne 0 ]; then
             printf 'ERROR: record decryption failed (bad tag)\n' >&2
             return 1

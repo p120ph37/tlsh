@@ -2,6 +2,8 @@
 # sha256.sh - SHA-256 hash (FIPS 180-4)
 # Pure shell implementation operating on hex strings.
 # Reference: FIPS PUB 180-4, August 2015
+#
+# Performance: all operations inlined to avoid subshell overhead.
 
 # SHA-256 round constants (first 32 bits of fractional parts of cube roots of first 64 primes)
 _sha256_k=(
@@ -15,70 +17,9 @@ _sha256_k=(
     0x748f82ee 0x78a5636f 0x84c87814 0x8cc70208 0x90befffa 0xa4506ceb 0xbef9a3f7 0xc67178f2
 )
 
-# _sha256_rotr <value> <bits> - Right rotate a 32-bit value
-_sha256_rotr() {
-    local val=$(( $1 & 0xFFFFFFFF ))
-    local n=$2
-    printf '%d' $(( ((val >> n) | (val << (32 - n))) & 0xFFFFFFFF ))
-}
-
-# _sha256_shr <value> <bits> - Right shift a 32-bit value
-_sha256_shr() {
-    printf '%d' $(( ($1 >> $2) & 0xFFFFFFFF ))
-}
-
-# _sha256_ch <x> <y> <z>
-_sha256_ch() {
-    printf '%d' $(( (($1 & $2) ^ ((~$1) & $3)) & 0xFFFFFFFF ))
-}
-
-# _sha256_maj <x> <y> <z>
-_sha256_maj() {
-    printf '%d' $(( (($1 & $2) ^ ($1 & $3) ^ ($2 & $3)) & 0xFFFFFFFF ))
-}
-
-# _sha256_sigma0 <x> - Big sigma 0
-_sha256_sigma0() {
-    local x=$1
-    local r2 r13 r22
-    r2=$(_sha256_rotr "$x" 2)
-    r13=$(_sha256_rotr "$x" 13)
-    r22=$(_sha256_rotr "$x" 22)
-    printf '%d' $(( (r2 ^ r13 ^ r22) & 0xFFFFFFFF ))
-}
-
-# _sha256_sigma1 <x> - Big sigma 1
-_sha256_sigma1() {
-    local x=$1
-    local r6 r11 r25
-    r6=$(_sha256_rotr "$x" 6)
-    r11=$(_sha256_rotr "$x" 11)
-    r25=$(_sha256_rotr "$x" 25)
-    printf '%d' $(( (r6 ^ r11 ^ r25) & 0xFFFFFFFF ))
-}
-
-# _sha256_gamma0 <x> - Small sigma 0
-_sha256_gamma0() {
-    local x=$1
-    local r7 r18 s3
-    r7=$(_sha256_rotr "$x" 7)
-    r18=$(_sha256_rotr "$x" 18)
-    s3=$(_sha256_shr "$x" 3)
-    printf '%d' $(( (r7 ^ r18 ^ s3) & 0xFFFFFFFF ))
-}
-
-# _sha256_gamma1 <x> - Small sigma 1
-_sha256_gamma1() {
-    local x=$1
-    local r17 r19 s10
-    r17=$(_sha256_rotr "$x" 17)
-    r19=$(_sha256_rotr "$x" 19)
-    s10=$(_sha256_shr "$x" 10)
-    printf '%d' $(( (r17 ^ r19 ^ s10) & 0xFFFFFFFF ))
-}
-
 # _sha256_compress <block_hex_128chars> <h0..h7 as space-separated>
 # Outputs updated h0..h7 as space-separated integers.
+# All operations are inlined to avoid subshell fork overhead.
 _sha256_compress() {
     local block="$1"
     shift
@@ -92,35 +33,44 @@ _sha256_compress() {
         i=$((i + 1))
     done
     while [ $i -lt 64 ]; do
-        local g1 g0
-        g1=$(_sha256_gamma1 "${w[$((i-2))]}")
-        g0=$(_sha256_gamma0 "${w[$((i-15))]}")
-        w[$i]=$(( (g1 + w[$((i-7))] + g0 + w[$((i-16))]) & 0xFFFFFFFF ))
+        # Inline gamma1(w[i-2]): rotr17 ^ rotr19 ^ shr10
+        local _wt=${w[$((i-2))]}
+        _wt=$(( _wt & 0xFFFFFFFF ))
+        local _g1=$(( (((_wt >> 17) | (_wt << 15)) ^ ((_wt >> 19) | (_wt << 13)) ^ (_wt >> 10)) & 0xFFFFFFFF ))
+        # Inline gamma0(w[i-15]): rotr7 ^ rotr18 ^ shr3
+        _wt=${w[$((i-15))]}
+        _wt=$(( _wt & 0xFFFFFFFF ))
+        local _g0=$(( (((_wt >> 7) | (_wt << 25)) ^ ((_wt >> 18) | (_wt << 14)) ^ (_wt >> 3)) & 0xFFFFFFFF ))
+        w[$i]=$(( (_g1 + w[$((i-7))] + _g0 + w[$((i-16))]) & 0xFFFFFFFF ))
         i=$((i + 1))
     done
 
     # Working variables
     local a=$h0 b=$h1 c=$h2 d=$h3 e=$h4 f=$h5 g=$h6 h=$h7
 
-    # 64 rounds
+    # 64 rounds - all helper functions inlined
     i=0
     while [ $i -lt 64 ]; do
-        local s1 ch temp1 s0 maj temp2
-        s1=$(_sha256_sigma1 "$e")
-        ch=$(_sha256_ch "$e" "$f" "$g")
-        temp1=$(( (h + s1 + ch + ${_sha256_k[$i]} + ${w[$i]}) & 0xFFFFFFFF ))
-        s0=$(_sha256_sigma0 "$a")
-        maj=$(_sha256_maj "$a" "$b" "$c")
-        temp2=$(( (s0 + maj) & 0xFFFFFFFF ))
+        # Inline sigma1(e): rotr6(e) ^ rotr11(e) ^ rotr25(e)
+        local _ev=$(( e & 0xFFFFFFFF ))
+        local _s1=$(( (((_ev >> 6) | (_ev << 26)) ^ ((_ev >> 11) | (_ev << 21)) ^ ((_ev >> 25) | (_ev << 7))) & 0xFFFFFFFF ))
+        # Inline ch(e,f,g): (e & f) ^ (~e & g)
+        local _ch=$(( ((_ev & f) ^ ((~_ev) & g)) & 0xFFFFFFFF ))
+        local _t1=$(( (h + _s1 + _ch + ${_sha256_k[$i]} + ${w[$i]}) & 0xFFFFFFFF ))
+        # Inline sigma0(a): rotr2(a) ^ rotr13(a) ^ rotr22(a)
+        local _av=$(( a & 0xFFFFFFFF ))
+        local _s0=$(( (((_av >> 2) | (_av << 30)) ^ ((_av >> 13) | (_av << 19)) ^ ((_av >> 22) | (_av << 10))) & 0xFFFFFFFF ))
+        # Inline maj(a,b,c): (a & b) ^ (a & c) ^ (b & c)
+        local _t2=$(( (_s0 + ((_av & b) ^ (_av & c) ^ (b & c))) & 0xFFFFFFFF ))
 
         h=$g
         g=$f
         f=$e
-        e=$(( (d + temp1) & 0xFFFFFFFF ))
+        e=$(( (d + _t1) & 0xFFFFFFFF ))
         d=$c
         c=$b
         b=$a
-        a=$(( (temp1 + temp2) & 0xFFFFFFFF ))
+        a=$(( (_t1 + _t2) & 0xFFFFFFFF ))
 
         i=$((i + 1))
     done

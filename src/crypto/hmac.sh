@@ -22,15 +22,15 @@ hmac_sha256() {
         key="${key}00"
     done
 
-    # Create ipad and opad (0x36 and 0x5c repeated)
+    # Create ipad and opad (0x36 and 0x5c repeated) - 4 bytes at a time
     local ipad=""
     local opad=""
     local i=0
     while [ $i -lt $_HMAC_BLOCK_SIZE_HEX ]; do
-        local key_byte=$((16#${key:$i:2}))
-        ipad="${ipad}$(printf '%02x' $(( key_byte ^ 0x36 )))"
-        opad="${opad}$(printf '%02x' $(( key_byte ^ 0x5c )))"
-        i=$((i + 2))
+        local key_word=$((16#${key:$i:8}))
+        ipad="${ipad}$(printf '%08x' $(( key_word ^ 0x36363636 )))"
+        opad="${opad}$(printf '%08x' $(( key_word ^ 0x5c5c5c5c )))"
+        i=$((i + 8))
     done
 
     # HMAC = H(opad || H(ipad || message))

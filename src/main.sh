@@ -17,6 +17,7 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_TLSH_DIR/crypto/hkdf.sh"
 . "$_TLSH_DIR/crypto/aes.sh"
 . "$_TLSH_DIR/crypto/gcm.sh"
+. "$_TLSH_DIR/crypto/chacha20poly1305.sh"
 . "$_TLSH_DIR/crypto/x25519.sh"
 . "$_TLSH_DIR/crypto/rsa.sh"
 

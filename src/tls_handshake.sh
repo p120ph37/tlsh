@@ -26,6 +26,10 @@ _TLS_GROUP_X25519=0x001d
 
 # Cipher suites
 _TLS_CS_AES_128_GCM_SHA256=0x1301
+_TLS_CS_CHACHA20_POLY1305_SHA256=0x1303
+
+# Selected cipher suite (set during handshake)
+_tls_cipher_suite=0
 
 # Transcript hash: accumulated handshake messages
 _tls_transcript=""
@@ -122,8 +126,9 @@ _tls_build_client_hello() {
     body="${body}${client_random}"                   # random (32 bytes)
     body="${body}20"                                 # session_id length = 32
     body="${body}$(_tls_generate_random 32)"         # legacy_session_id (for middlebox compat)
-    body="${body}0002"                               # cipher_suites length = 2
-    body="${body}$(uint16_to_hex $_TLS_CS_AES_128_GCM_SHA256)"  # TLS_AES_128_GCM_SHA256
+    body="${body}0004"                               # cipher_suites length = 4
+    body="${body}$(uint16_to_hex $_TLS_CS_CHACHA20_POLY1305_SHA256)"  # preferred
+    body="${body}$(uint16_to_hex $_TLS_CS_AES_128_GCM_SHA256)"
     body="${body}0100"                               # compression_methods: 1 method, null
 
     body="${body}$(uint16_to_hex "$extensions_len")"
@@ -155,7 +160,7 @@ _tls_parse_server_hello() {
     offset=$((offset + sid_len * 2))
 
     # cipher_suite (2 bytes)
-    local cs=$((16#${p:$offset:4}))
+    _tls_cipher_suite=$((16#${p:$offset:4}))
     offset=$((offset + 4))
 
     # compression_method (1 byte)
@@ -411,6 +416,15 @@ tls_handshake() {
     _tls_parse_server_hello "$sh_body"
     _tls_transcript="${_tls_transcript}${sh_msg}"
 
+    # Determine key length based on selected cipher suite
+    local key_len=16  # AES-128-GCM default
+    if [ "$_tls_cipher_suite" -eq "$_TLS_CS_CHACHA20_POLY1305_SHA256" ]; then
+        key_len=32
+        printf 'TLS: cipher suite = TLS_CHACHA20_POLY1305_SHA256\n' >&2
+    else
+        printf 'TLS: cipher suite = TLS_AES_128_GCM_SHA256\n' >&2
+    fi
+
     printf 'TLS: computing handshake keys...\n' >&2
 
     # Compute shared secret via X25519
@@ -445,11 +459,11 @@ tls_handshake() {
 
     # Derive traffic keys and IVs
     local server_hs_key
-    server_hs_key=$(hkdf_expand_label "$server_hs_secret" "key" "" 16)
+    server_hs_key=$(hkdf_expand_label "$server_hs_secret" "key" "" "$key_len")
     local server_hs_iv
     server_hs_iv=$(hkdf_expand_label "$server_hs_secret" "iv" "" 12)
     local client_hs_key
-    client_hs_key=$(hkdf_expand_label "$client_hs_secret" "key" "" 16)
+    client_hs_key=$(hkdf_expand_label "$client_hs_secret" "key" "" "$key_len")
     local client_hs_iv
     client_hs_iv=$(hkdf_expand_label "$client_hs_secret" "iv" "" 12)
 
@@ -565,11 +579,11 @@ tls_handshake() {
     server_app_secret=$(hkdf_expand_label "$master_secret" "s ap traffic" "$app_hash" 32)
 
     local server_app_key
-    server_app_key=$(hkdf_expand_label "$server_app_secret" "key" "" 16)
+    server_app_key=$(hkdf_expand_label "$server_app_secret" "key" "" "$key_len")
     local server_app_iv
     server_app_iv=$(hkdf_expand_label "$server_app_secret" "iv" "" 12)
     local client_app_key
-    client_app_key=$(hkdf_expand_label "$client_app_secret" "key" "" 16)
+    client_app_key=$(hkdf_expand_label "$client_app_secret" "key" "" "$key_len")
     local client_app_iv
     client_app_iv=$(hkdf_expand_label "$client_app_secret" "iv" "" 12)
 
