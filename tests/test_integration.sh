@@ -76,17 +76,17 @@ if [ $handshake_result -eq 0 ]; then
         # Check if it looks like an HTTP response
         case "$response" in
             HTTP/*)
-                assert_true "true" "received HTTP response"
+                assert_true 0 "received HTTP response"
                 ;;
             *)
-                assert_true "false" "expected HTTP response, got something else"
+                assert_true 1 "expected HTTP response, got something else"
                 ;;
         esac
     else
-        assert_true "false" "failed to receive HTTP response (rc=$recv_result)"
+        assert_true 1 "failed to receive HTTP response (rc=$recv_result)"
     fi
 else
-    assert_true "false" "handshake failed (rc=$handshake_result)"
+    assert_true 1 "handshake failed (rc=$handshake_result)"
 fi
 tcp_close
 

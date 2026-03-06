@@ -58,6 +58,8 @@ server.modules = ("mod_openssl")
     ssl.openssl.ssl-conf-cmd += ("CipherSuites" => "TLS_AES_128_GCM_SHA256")
     ssl.openssl.ssl-conf-cmd += ("Groups" => "X25519")
 }
+server.max-read-idle = 1800
+server.max-write-idle = 1800
 mimetype.assign = (".txt" => "text/plain")
 CONFEOF
 
@@ -118,21 +120,21 @@ if [ $handshake_result -eq 0 ]; then
         printf '  Response: %.80s\n' "$response"
         case "$response" in
             *"Hello from tlsh"*)
-                assert_true "true" "received expected content from lighttpd"
+                assert_true 0 "received expected content from lighttpd"
                 ;;
             HTTP/*)
                 # Got HTTP response but maybe content is in next record
-                assert_true "true" "received HTTP response (headers)"
+                assert_true 0 "received HTTP response (headers)"
                 ;;
             *)
-                assert_true "false" "unexpected response content"
+                assert_true 1 "unexpected response content"
                 ;;
         esac
     else
-        assert_true "false" "failed to receive response"
+        assert_true 1 "failed to receive response"
     fi
 else
-    assert_true "false" "handshake failed"
+    assert_true 1 "handshake failed"
 fi
 tcp_close
 
