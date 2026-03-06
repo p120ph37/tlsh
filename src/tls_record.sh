@@ -49,7 +49,7 @@ _tls_make_nonce() {
     local iv="$1"
     local seq=$2
     local seq_hex
-    seq_hex=$(printf '%024x' "$seq")  # 12 bytes = 24 hex chars
+    printf -v seq_hex '%024x' "$seq"  # 12 bytes = 24 hex chars
     hex_xor "$iv" "$seq_hex"
 }
 
@@ -61,7 +61,9 @@ tls_record_send() {
 
     if [ "$_tls_encrypted" -eq 1 ]; then
         # TLS 1.3 encrypted record: append actual content type to plaintext
-        local inner_plaintext="${payload}$(uint8_to_hex "$ct")"
+        local _rec_ct_hex
+        printf -v _rec_ct_hex '%02x' "$(( ct & 0xFF ))"
+        local inner_plaintext="${payload}${_rec_ct_hex}"
 
         # Construct nonce
         local nonce
@@ -70,7 +72,10 @@ tls_record_send() {
         # AAD = record header (with outer content type = application_data)
         local inner_len=$(( ${#inner_plaintext} / 2 ))
         local ct_len=$((inner_len + 16))  # ciphertext + 16-byte tag
-        local aad="$(uint8_to_hex $TLS_CT_APPLICATION_DATA)${TLS_RECORD_VERSION}$(uint16_to_hex "$ct_len")"
+        local _rec_ad_ct _rec_ad_len
+        printf -v _rec_ad_ct '%02x' "$(( TLS_CT_APPLICATION_DATA & 0xFF ))"
+        printf -v _rec_ad_len '%04x' "$(( ct_len & 0xFFFF ))"
+        local aad="${_rec_ad_ct}${TLS_RECORD_VERSION}${_rec_ad_len}"
 
         # Encrypt using selected cipher suite
         local result
@@ -90,7 +95,10 @@ tls_record_send() {
     else
         # Plaintext record
         local payload_len=$(( ${#payload} / 2 ))
-        local header="$(uint8_to_hex "$ct")${TLS_RECORD_VERSION}$(uint16_to_hex "$payload_len")"
+        local _rec_hdr_ct _rec_hdr_len
+        printf -v _rec_hdr_ct '%02x' "$(( ct & 0xFF ))"
+        printf -v _rec_hdr_len '%04x' "$(( payload_len & 0xFFFF ))"
+        local header="${_rec_hdr_ct}${TLS_RECORD_VERSION}${_rec_hdr_len}"
         tcp_send_hex "${header}${payload}"
     fi
 }

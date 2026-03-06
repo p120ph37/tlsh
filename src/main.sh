@@ -10,8 +10,6 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source utility modules
 . "$_TLSH_DIR/util/hex.sh"
 . "$_TLSH_DIR/util/bytes.sh"
-. "$_TLSH_DIR/util/jit.sh"
-
 # Source crypto modules
 . "$_TLSH_DIR/crypto/sha256.sh"
 . "$_TLSH_DIR/crypto/hmac.sh"
@@ -29,15 +27,6 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source TLS protocol modules
 . "$_TLSH_DIR/tls_record.sh"
 . "$_TLSH_DIR/tls_handshake.sh"
-
-# Register small utility functions as inlinable (body-copy candidates)
-_jit_mark_inlinable uint8_to_hex uint16_to_hex uint24_to_hex uint32_to_hex ascii_to_hex
-
-# JIT-optimize functions that still benefit from body-copy inlining of callees.
-# Note: printf -v optimizations are now in source directly (sha256, hex_xor, hmac,
-# aes, chacha20, gcm, x25519, bytes). JIT focuses on inlining utility function
-# calls (ascii_to_hex, uint*_to_hex) to eliminate remaining subshell forks.
-_jit_inline hkdf_expand_label _tls_build_client_hello hkdf_expand
 
 # s_client - TLS client (equivalent to openssl s_client)
 # Usage: s_client -connect host:port

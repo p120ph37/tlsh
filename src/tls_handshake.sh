@@ -83,6 +83,8 @@ _tls_build_client_hello() {
     local client_random="$2"
     local x25519_pub="$3"
 
+    local _ch_tmp  # reusable temp for printf -v
+
     # Build extensions
     local extensions=""
 
@@ -91,34 +93,57 @@ _tls_build_client_hello() {
     hostname_hex=$(ascii_to_hex "$hostname")
     local hostname_len=${#hostname}
     # ServerNameList: length(2) + ServerName: type(1)=0x00 + length(2) + name
-    local sni_entry="00$(uint16_to_hex "$hostname_len")${hostname_hex}"
+    printf -v _ch_tmp '%04x' "$(( hostname_len & 0xFFFF ))"
+    local sni_entry="00${_ch_tmp}${hostname_hex}"
     local sni_list_len=$(( ${#sni_entry} / 2 ))
-    local sni_list="$(uint16_to_hex "$sni_list_len")${sni_entry}"
+    printf -v _ch_tmp '%04x' "$(( sni_list_len & 0xFFFF ))"
+    local sni_list="${_ch_tmp}${sni_entry}"
     local sni_ext_data_len=$(( ${#sni_list} / 2 ))
-    extensions="${extensions}$(uint16_to_hex $_TLS_EXT_SERVER_NAME)$(uint16_to_hex "$sni_ext_data_len")${sni_list}"
+    local _ch_ext_type _ch_ext_dlen
+    printf -v _ch_ext_type '%04x' "$(( _TLS_EXT_SERVER_NAME & 0xFFFF ))"
+    printf -v _ch_ext_dlen '%04x' "$(( sni_ext_data_len & 0xFFFF ))"
+    extensions="${extensions}${_ch_ext_type}${_ch_ext_dlen}${sni_list}"
 
     # Supported Groups extension (x25519 only)
-    local groups_list="$(uint16_to_hex 2)$(uint16_to_hex $_TLS_GROUP_X25519)"
+    local _ch_g1 _ch_g2
+    printf -v _ch_g1 '%04x' "$(( 2 & 0xFFFF ))"
+    printf -v _ch_g2 '%04x' "$(( _TLS_GROUP_X25519 & 0xFFFF ))"
+    local groups_list="${_ch_g1}${_ch_g2}"
     local groups_len=$(( ${#groups_list} / 2 ))
-    extensions="${extensions}$(uint16_to_hex $_TLS_EXT_SUPPORTED_GROUPS)$(uint16_to_hex "$groups_len")${groups_list}"
+    printf -v _ch_ext_type '%04x' "$(( _TLS_EXT_SUPPORTED_GROUPS & 0xFFFF ))"
+    printf -v _ch_ext_dlen '%04x' "$(( groups_len & 0xFFFF ))"
+    extensions="${extensions}${_ch_ext_type}${_ch_ext_dlen}${groups_list}"
 
     # Signature Algorithms extension
-    local sig_algos="$(uint16_to_hex 2)$(uint16_to_hex $_TLS_SIG_RSA_PSS_RSAE_SHA256)"
+    local _ch_s1 _ch_s2
+    printf -v _ch_s1 '%04x' "$(( 2 & 0xFFFF ))"
+    printf -v _ch_s2 '%04x' "$(( _TLS_SIG_RSA_PSS_RSAE_SHA256 & 0xFFFF ))"
+    local sig_algos="${_ch_s1}${_ch_s2}"
     local sig_len=$(( ${#sig_algos} / 2 ))
-    extensions="${extensions}$(uint16_to_hex $_TLS_EXT_SIGNATURE_ALGORITHMS)$(uint16_to_hex "$sig_len")${sig_algos}"
+    printf -v _ch_ext_type '%04x' "$(( _TLS_EXT_SIGNATURE_ALGORITHMS & 0xFFFF ))"
+    printf -v _ch_ext_dlen '%04x' "$(( sig_len & 0xFFFF ))"
+    extensions="${extensions}${_ch_ext_type}${_ch_ext_dlen}${sig_algos}"
 
     # Supported Versions extension (TLS 1.3 = 0x0304)
     local sup_ver="020304"  # list_length=2 bytes, version=0x0304
     local sup_ver_len=$(( ${#sup_ver} / 2 ))
-    extensions="${extensions}$(uint16_to_hex $_TLS_EXT_SUPPORTED_VERSIONS)$(uint16_to_hex "$sup_ver_len")${sup_ver}"
+    printf -v _ch_ext_type '%04x' "$(( _TLS_EXT_SUPPORTED_VERSIONS & 0xFFFF ))"
+    printf -v _ch_ext_dlen '%04x' "$(( sup_ver_len & 0xFFFF ))"
+    extensions="${extensions}${_ch_ext_type}${_ch_ext_dlen}${sup_ver}"
 
     # Key Share extension (x25519 public key)
     # KeyShareEntry: group(2) + key_exchange_length(2) + key_exchange(32)
-    local ks_entry="$(uint16_to_hex $_TLS_GROUP_X25519)$(uint16_to_hex 32)${x25519_pub}"
+    local _ch_ks1 _ch_ks2
+    printf -v _ch_ks1 '%04x' "$(( _TLS_GROUP_X25519 & 0xFFFF ))"
+    printf -v _ch_ks2 '%04x' "$(( 32 & 0xFFFF ))"
+    local ks_entry="${_ch_ks1}${_ch_ks2}${x25519_pub}"
     local ks_client_len=$(( ${#ks_entry} / 2 ))
-    local ks_ext="$(uint16_to_hex "$ks_client_len")${ks_entry}"
+    printf -v _ch_tmp '%04x' "$(( ks_client_len & 0xFFFF ))"
+    local ks_ext="${_ch_tmp}${ks_entry}"
     local ks_ext_len=$(( ${#ks_ext} / 2 ))
-    extensions="${extensions}$(uint16_to_hex $_TLS_EXT_KEY_SHARE)$(uint16_to_hex "$ks_ext_len")${ks_ext}"
+    printf -v _ch_ext_type '%04x' "$(( _TLS_EXT_KEY_SHARE & 0xFFFF ))"
+    printf -v _ch_ext_dlen '%04x' "$(( ks_ext_len & 0xFFFF ))"
+    extensions="${extensions}${_ch_ext_type}${_ch_ext_dlen}${ks_ext}"
 
     local extensions_len=$(( ${#extensions} / 2 ))
 
@@ -129,16 +154,22 @@ _tls_build_client_hello() {
     body="${body}20"                                 # session_id length = 32
     body="${body}$(_tls_generate_random 32)"         # legacy_session_id (for middlebox compat)
     body="${body}0004"                               # cipher_suites length = 4
-    body="${body}$(uint16_to_hex $_TLS_CS_CHACHA20_POLY1305_SHA256)"  # preferred
-    body="${body}$(uint16_to_hex $_TLS_CS_AES_128_GCM_SHA256)"
+    printf -v _ch_tmp '%04x' "$(( _TLS_CS_CHACHA20_POLY1305_SHA256 & 0xFFFF ))"
+    body="${body}${_ch_tmp}"                         # preferred
+    printf -v _ch_tmp '%04x' "$(( _TLS_CS_AES_128_GCM_SHA256 & 0xFFFF ))"
+    body="${body}${_ch_tmp}"
     body="${body}0100"                               # compression_methods: 1 method, null
 
-    body="${body}$(uint16_to_hex "$extensions_len")"
+    printf -v _ch_tmp '%04x' "$(( extensions_len & 0xFFFF ))"
+    body="${body}${_ch_tmp}"
     body="${body}${extensions}"
 
     # Wrap in handshake header: type(1) + length(3)
     local body_len=$(( ${#body} / 2 ))
-    local msg="$(uint8_to_hex $_TLS_HT_CLIENT_HELLO)$(uint24_to_hex "$body_len")${body}"
+    local _ch_ht _ch_blen
+    printf -v _ch_ht '%02x' "$(( _TLS_HT_CLIENT_HELLO & 0xFF ))"
+    printf -v _ch_blen '%06x' "$(( body_len & 0xFFFFFF ))"
+    local msg="${_ch_ht}${_ch_blen}${body}"
 
     printf '%s' "$msg"
 }
@@ -572,7 +603,10 @@ tls_handshake() {
     client_fin_hash=$(_tls_transcript_hash)
     local client_verify_data
     client_verify_data=$(hmac_sha256 "$client_finished_key" "$client_fin_hash")
-    local client_finished_msg="$(uint8_to_hex $_TLS_HT_FINISHED)$(uint24_to_hex 32)${client_verify_data}"
+    local _hs_fin_ht _hs_fin_len
+    printf -v _hs_fin_ht '%02x' "$(( _TLS_HT_FINISHED & 0xFF ))"
+    printf -v _hs_fin_len '%06x' "$(( 32 & 0xFFFFFF ))"
+    local client_finished_msg="${_hs_fin_ht}${_hs_fin_len}${client_verify_data}"
     _tls_transcript="${_tls_transcript}${client_finished_msg}"
     tls_record_send $TLS_CT_HANDSHAKE "$client_finished_msg"
     local client_app_secret
