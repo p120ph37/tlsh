@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test_jit.sh - Tests for JIT function inliner
+# test_jit.sh - Tests for generalized JIT function inliner
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -21,6 +21,9 @@ assert_eq() {
     fi
 }
 
+# Register the utility functions as inlinable
+_jit_mark_inlinable uint8_to_hex uint16_to_hex uint24_to_hex uint32_to_hex ascii_to_hex
+
 # ---- Test 1: Direct assignment of uint16_to_hex ----
 test_direct_uint16() {
     eval 'test_func_1() {
@@ -36,7 +39,7 @@ test_direct_uint16() {
     assert_eq "direct uint16_to_hex 255" "$before" "$after"
     assert_eq "direct uint16_to_hex value" "00ff" "$after"
 
-    # Verify the function no longer contains $(uint16_to_hex
+    # Verify no subshell remains
     local src
     src=$(declare -f test_func_1)
     case "$src" in
@@ -62,8 +65,8 @@ test_inline_uint16() {
     assert_eq "inline uint16 value" "aa000abb" "$after"
 }
 
-# ---- Test 3: Multiple uint patterns on one line ----
-test_multi_uint() {
+# ---- Test 3: Multiple subshell calls on one line ----
+test_multi() {
     eval 'test_func_3() {
         local x="$(uint8_to_hex 16)$(uint16_to_hex 256)"
         printf "%s" "$x"
@@ -74,8 +77,8 @@ test_multi_uint() {
     _jit_inline test_func_3
     local after
     after=$(test_func_3)
-    assert_eq "multi uint on one line" "$before" "$after"
-    assert_eq "multi uint value" "100100" "$after"
+    assert_eq "multi inlines on one line" "$before" "$after"
+    assert_eq "multi value" "100100" "$after"
 }
 
 # ---- Test 4: uint24_to_hex ----
@@ -94,8 +97,8 @@ test_uint24() {
     assert_eq "uint24 value" "001000" "$after"
 }
 
-# ---- Test 5: ascii_to_hex direct assignment ----
-test_ascii_direct() {
+# ---- Test 5: ascii_to_hex direct assignment (literal) ----
+test_ascii_literal() {
     eval 'test_func_5() {
         local x=$(ascii_to_hex "Hi")
         printf "%s" "$x"
@@ -106,8 +109,8 @@ test_ascii_direct() {
     _jit_inline test_func_5
     local after
     after=$(test_func_5)
-    assert_eq "ascii_to_hex direct" "$before" "$after"
-    assert_eq "ascii_to_hex value" "4869" "$after"
+    assert_eq "ascii_to_hex literal" "$before" "$after"
+    assert_eq "ascii_to_hex literal value" "4869" "$after"
 }
 
 # ---- Test 6: ascii_to_hex with variable ----
@@ -127,7 +130,7 @@ test_ascii_var() {
     assert_eq "ascii_to_hex var value" "4142" "$after"
 }
 
-# ---- Test 7: Lines without patterns pass through unchanged ----
+# ---- Test 7: Passthrough (no inlinable calls) ----
 test_passthrough() {
     eval 'test_func_7() {
         local a=5
@@ -144,7 +147,7 @@ test_passthrough() {
     assert_eq "passthrough value" "8" "$after"
 }
 
-# ---- Test 8: Real-world pattern from hkdf_expand_label ----
+# ---- Test 8: Real-world hkdf_expand_label pattern ----
 test_hkdf_pattern() {
     eval 'test_func_8() {
         local length=32
@@ -182,11 +185,14 @@ test_mixed() {
     assert_eq "mixed value" "000102" "$after"
 }
 
-# ---- Test 10: uint32_to_hex ----
-test_uint32() {
+# ---- Test 10: Local variable namespacing ----
+test_namespace_collision() {
+    # Test that inlined locals don't collide with caller locals
     eval 'test_func_10() {
-        local x=$(uint32_to_hex 65536)
-        printf "%s" "$x"
+        local i=42
+        local hex=$(ascii_to_hex "XY")
+        local result="${hex}_${i}"
+        printf "%s" "$result"
     }'
     local before
     before=$(test_func_10)
@@ -194,21 +200,79 @@ test_uint32() {
     _jit_inline test_func_10
     local after
     after=$(test_func_10)
+    assert_eq "namespace collision protection" "$before" "$after"
+    assert_eq "namespace value" "5859_42" "$after"
+}
+
+# ---- Test 11: uint32_to_hex ----
+test_uint32() {
+    eval 'test_func_11() {
+        local x=$(uint32_to_hex 65536)
+        printf "%s" "$x"
+    }'
+    local before
+    before=$(test_func_11)
+
+    _jit_inline test_func_11
+    local after
+    after=$(test_func_11)
     assert_eq "uint32_to_hex" "$before" "$after"
     assert_eq "uint32 value" "00010000" "$after"
+}
+
+# ---- Test 12: $(printf) inlining ----
+test_printf_inline() {
+    eval 'test_func_12() {
+        local x=$(printf "%02x" 255)
+        printf "%s" "$x"
+    }'
+    local before
+    before=$(test_func_12)
+
+    _jit_inline test_func_12
+    local after
+    after=$(test_func_12)
+    assert_eq "printf inlining" "$before" "$after"
+    assert_eq "printf value" "ff" "$after"
+
+    # Verify $(printf was removed
+    local src
+    src=$(declare -f test_func_12)
+    case "$src" in
+        *'$(printf'*) assert_eq "printf subshell removed" "no_subshell" "has_subshell" ;;
+        *) assert_eq "printf subshell removed" "no_subshell" "no_subshell" ;;
+    esac
+}
+
+# ---- Test 13: Show inlined source for inspection ----
+test_show_inlined() {
+    eval 'test_func_show() {
+        local val=10
+        local a=$(uint16_to_hex "$val")
+        local b="prefix$(uint8_to_hex 5)suffix"
+        local c=$(ascii_to_hex "AB")
+        printf "%s" "${a}${b}${c}"
+    }'
+    _jit_inline test_func_show
+    local result
+    result=$(test_func_show)
+    assert_eq "show inlined result" "000aprefix05suffix4142" "$result"
 }
 
 # ---- Run all tests ----
 test_direct_uint16
 test_inline_uint16
-test_multi_uint
+test_multi
 test_uint24
-test_ascii_direct
+test_ascii_literal
 test_ascii_var
 test_passthrough
 test_hkdf_pattern
 test_mixed
+test_namespace_collision
 test_uint32
+test_printf_inline
+test_show_inlined
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$_pass" "$_fail"
 [ "$_fail" -eq 0 ] || exit 1

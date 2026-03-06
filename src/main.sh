@@ -30,7 +30,10 @@ _TLSH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_TLSH_DIR/tls_record.sh"
 . "$_TLSH_DIR/tls_handshake.sh"
 
-# JIT-optimize hot functions: replace subshell calls with inline printf -v
+# Register small utility functions as inlinable (body-copy candidates)
+_jit_mark_inlinable uint8_to_hex uint16_to_hex uint24_to_hex uint32_to_hex ascii_to_hex
+
+# JIT-optimize hot functions: inline registered callees + $(printf) elimination
 _jit_inline hkdf_expand_label _tls_build_client_hello
 
 # s_client - TLS client (equivalent to openssl s_client)
