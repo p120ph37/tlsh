@@ -92,9 +92,11 @@ _fe_pack() {
     done
 
     local result=""
+    local _fe_tmp
     i=0
     while [ $i -lt 32 ]; do
-        result="${result}$(printf '%02x' $(( ${bytes[$i]} & 0xFF )))"
+        printf -v _fe_tmp '%02x' $(( ${bytes[$i]} & 0xFF ))
+        result="${result}${_fe_tmp}"
         i=$((i + 1))
     done
     printf '%s' "$result"

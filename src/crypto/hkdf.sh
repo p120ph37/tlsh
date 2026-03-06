@@ -30,7 +30,7 @@ hkdf_expand() {
 
     while [ $i -le "$n" ]; do
         local counter
-        counter=$(printf '%02x' "$i")
+        printf -v counter '%02x' "$i"
         t=$(hmac_sha256 "$prk" "${t}${info}${counter}")
         okm="${okm}${t}"
         i=$((i + 1))

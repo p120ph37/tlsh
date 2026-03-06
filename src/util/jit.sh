@@ -216,6 +216,9 @@ _jit_rename_locals() {
         body="${body//local ${name};/local ${pfx}${name};}"
         body="${body//local ${name} /local ${pfx}${name} }"
 
+        # "printf -v name" → "printf -v pfx_name" (printf-to-variable)
+        body="${body//printf -v ${name} /printf -v ${pfx}${name} }"
+
         # Bare assignment: name= → pfx_name= (not preceded by $, {, or _)
         # Handle start-of-line and after-whitespace assignments
         local _line _newbody=""

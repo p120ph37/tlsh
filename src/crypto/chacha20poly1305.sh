@@ -6,26 +6,21 @@
 # Poly1305 uses 130-bit modular arithmetic with 5 × 26-bit limbs.
 # Both are significantly cheaper in shell than AES-GCM.
 
-# _chacha20_rotl <val> <n> - 32-bit left rotation
-# Result in _cc20_tmp
-_chacha20_rotl() {
-    _cc20_tmp=$(( (($1 << $2) | (($1 >> (32 - $2)) & ((1 << $2) - 1))) & 0xFFFFFFFF ))
-}
-
 # _chacha20_quarter_round - Quarter round on state words a,b,c,d
 # Modifies _cc state array at indices $1,$2,$3,$4
+# Rotation is inlined to avoid function call overhead (32 calls per block).
 _chacha20_quarter_round() {
     local ai=$1 bi=$2 ci=$3 di=$4
     local a=${_cc[$ai]} b=${_cc[$bi]} c=${_cc[$ci]} d=${_cc[$di]}
 
     a=$(( (a + b) & 0xFFFFFFFF )); d=$((d ^ a))
-    _chacha20_rotl "$d" 16; d=$_cc20_tmp
+    d=$(( ((d << 16) | ((d >> 16) & 0xFFFF)) & 0xFFFFFFFF ))
     c=$(( (c + d) & 0xFFFFFFFF )); b=$((b ^ c))
-    _chacha20_rotl "$b" 12; b=$_cc20_tmp
+    b=$(( ((b << 12) | ((b >> 20) & 0xFFF)) & 0xFFFFFFFF ))
     a=$(( (a + b) & 0xFFFFFFFF )); d=$((d ^ a))
-    _chacha20_rotl "$d" 8; d=$_cc20_tmp
+    d=$(( ((d << 8) | ((d >> 24) & 0xFF)) & 0xFFFFFFFF ))
     c=$(( (c + d) & 0xFFFFFFFF )); b=$((b ^ c))
-    _chacha20_rotl "$b" 7; b=$_cc20_tmp
+    b=$(( ((b << 7) | ((b >> 25) & 0x7F)) & 0xFFFFFFFF ))
 
     _cc[$ai]=$a; _cc[$bi]=$b; _cc[$ci]=$c; _cc[$di]=$d
 }
@@ -98,9 +93,11 @@ _chacha20_block() {
     # Serialize to little-endian hex
     _cc20_block=""
     local wi=0
+    local _cc_tmp
     while [ $wi -lt 16 ]; do
         local w=${_cc[$wi]}
-        _cc20_block="${_cc20_block}$(printf '%02x%02x%02x%02x' $((w & 0xFF)) $(((w >> 8) & 0xFF)) $(((w >> 16) & 0xFF)) $(((w >> 24) & 0xFF)))"
+        printf -v _cc_tmp '%02x%02x%02x%02x' $((w & 0xFF)) $(((w >> 8) & 0xFF)) $(((w >> 16) & 0xFF)) $(((w >> 24) & 0xFF))
+        _cc20_block="${_cc20_block}${_cc_tmp}"
         wi=$((wi + 1))
     done
 }

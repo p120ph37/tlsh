@@ -176,11 +176,13 @@ aes128_encrypt_block() {
     _aes_add_round_key 10
 
     local result=""
+    local _aes_tmp
     col=0
     while [ $col -lt 4 ]; do
         local row=0
         while [ $row -lt 4 ]; do
-            result="${result}$(printf '%02x' "${_aes_state[$((row + col * 4))]}")"
+            printf -v _aes_tmp '%02x' "${_aes_state[$((row + col * 4))]}"
+            result="${result}${_aes_tmp}"
             row=$((row + 1))
         done
         col=$((col + 1))

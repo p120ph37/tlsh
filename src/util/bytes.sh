@@ -51,8 +51,10 @@ ascii_to_hex() {
     local str="$1"
     local hex=""
     local i=0
+    local _a2h_tmp
     while [ $i -lt ${#str} ]; do
-        hex="${hex}$(printf '%02x' "'${str:$i:1}")"
+        printf -v _a2h_tmp '%02x' "'${str:$i:1}"
+        hex="${hex}${_a2h_tmp}"
         i=$((i + 1))
     done
     printf '%s' "$hex"

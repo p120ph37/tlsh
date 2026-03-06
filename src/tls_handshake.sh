@@ -49,25 +49,27 @@ _tls_transcript_hash() {
 _tls_generate_random() {
     local n=$1
     local result=""
+    local _rng_tmp
     if [ -r /dev/urandom ]; then
-        # Read raw bytes and convert to hex using printf
         local i=0
         while IFS= read -r -n 1 -d '' byte <&3 && [ $i -lt "$n" ]; do
             if [ -z "$byte" ]; then
                 result="${result}00"
             else
-                result="${result}$(printf '%02x' "'$byte")"
+                printf -v _rng_tmp '%02x' "'$byte"
+                result="${result}${_rng_tmp}"
             fi
             i=$((i + 1))
         done 3</dev/urandom
-        # If we didn't get enough, pad with RANDOM
         while [ $(( ${#result} / 2 )) -lt "$n" ]; do
-            result="${result}$(printf '%02x' $((RANDOM % 256)))"
+            printf -v _rng_tmp '%02x' $((RANDOM % 256))
+            result="${result}${_rng_tmp}"
         done
     else
         local i=0
         while [ $i -lt "$n" ]; do
-            result="${result}$(printf '%02x' $((RANDOM % 256)))"
+            printf -v _rng_tmp '%02x' $((RANDOM % 256))
+            result="${result}${_rng_tmp}"
             i=$((i + 1))
         done
     fi

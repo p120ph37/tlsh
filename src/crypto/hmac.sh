@@ -26,10 +26,13 @@ hmac_sha256() {
     local ipad=""
     local opad=""
     local i=0
+    local _hmac_tmp
     while [ $i -lt $_HMAC_BLOCK_SIZE_HEX ]; do
         local key_word=$((16#${key:$i:8}))
-        ipad="${ipad}$(printf '%08x' $(( key_word ^ 0x36363636 )))"
-        opad="${opad}$(printf '%08x' $(( key_word ^ 0x5c5c5c5c )))"
+        printf -v _hmac_tmp '%08x' $(( key_word ^ 0x36363636 ))
+        ipad="${ipad}${_hmac_tmp}"
+        printf -v _hmac_tmp '%08x' $(( key_word ^ 0x5c5c5c5c ))
+        opad="${opad}${_hmac_tmp}"
         i=$((i + 8))
     done
 

@@ -17,9 +17,8 @@ _sha256_k=(
     0x748f82ee 0x78a5636f 0x84c87814 0x8cc70208 0x90befffa 0xa4506ceb 0xbef9a3f7 0xc67178f2
 )
 
-# _sha256_compress <block_hex_128chars> <h0..h7 as space-separated>
-# Outputs updated h0..h7 as space-separated integers.
-# All operations are inlined to avoid subshell fork overhead.
+# _sha256_compress <block_hex_128chars> <h0..h7 as args>
+# Updates _sha256_out[] array with new h0..h7 (no subshell needed).
 _sha256_compress() {
     local block="$1"
     shift
@@ -33,11 +32,9 @@ _sha256_compress() {
         i=$((i + 1))
     done
     while [ $i -lt 64 ]; do
-        # Inline gamma1(w[i-2]): rotr17 ^ rotr19 ^ shr10
         local _wt=${w[$((i-2))]}
         _wt=$(( _wt & 0xFFFFFFFF ))
         local _g1=$(( (((_wt >> 17) | (_wt << 15)) ^ ((_wt >> 19) | (_wt << 13)) ^ (_wt >> 10)) & 0xFFFFFFFF ))
-        # Inline gamma0(w[i-15]): rotr7 ^ rotr18 ^ shr3
         _wt=${w[$((i-15))]}
         _wt=$(( _wt & 0xFFFFFFFF ))
         local _g0=$(( (((_wt >> 7) | (_wt << 25)) ^ ((_wt >> 18) | (_wt << 14)) ^ (_wt >> 3)) & 0xFFFFFFFF ))
@@ -45,41 +42,34 @@ _sha256_compress() {
         i=$((i + 1))
     done
 
-    # Working variables
     local a=$h0 b=$h1 c=$h2 d=$h3 e=$h4 f=$h5 g=$h6 h=$h7
 
-    # 64 rounds - all helper functions inlined
     i=0
     while [ $i -lt 64 ]; do
-        # Inline sigma1(e): rotr6(e) ^ rotr11(e) ^ rotr25(e)
         local _ev=$(( e & 0xFFFFFFFF ))
         local _s1=$(( (((_ev >> 6) | (_ev << 26)) ^ ((_ev >> 11) | (_ev << 21)) ^ ((_ev >> 25) | (_ev << 7))) & 0xFFFFFFFF ))
-        # Inline ch(e,f,g): (e & f) ^ (~e & g)
         local _ch=$(( ((_ev & f) ^ ((~_ev) & g)) & 0xFFFFFFFF ))
         local _t1=$(( (h + _s1 + _ch + ${_sha256_k[$i]} + ${w[$i]}) & 0xFFFFFFFF ))
-        # Inline sigma0(a): rotr2(a) ^ rotr13(a) ^ rotr22(a)
         local _av=$(( a & 0xFFFFFFFF ))
         local _s0=$(( (((_av >> 2) | (_av << 30)) ^ ((_av >> 13) | (_av << 19)) ^ ((_av >> 22) | (_av << 10))) & 0xFFFFFFFF ))
-        # Inline maj(a,b,c): (a & b) ^ (a & c) ^ (b & c)
         local _t2=$(( (_s0 + ((_av & b) ^ (_av & c) ^ (b & c))) & 0xFFFFFFFF ))
 
-        h=$g
-        g=$f
-        f=$e
+        h=$g; g=$f; f=$e
         e=$(( (d + _t1) & 0xFFFFFFFF ))
-        d=$c
-        c=$b
-        b=$a
+        d=$c; c=$b; b=$a
         a=$(( (_t1 + _t2) & 0xFFFFFFFF ))
 
         i=$((i + 1))
     done
 
-    printf '%d %d %d %d %d %d %d %d' \
-        $(( (h0 + a) & 0xFFFFFFFF )) $(( (h1 + b) & 0xFFFFFFFF )) \
-        $(( (h2 + c) & 0xFFFFFFFF )) $(( (h3 + d) & 0xFFFFFFFF )) \
-        $(( (h4 + e) & 0xFFFFFFFF )) $(( (h5 + f) & 0xFFFFFFFF )) \
-        $(( (h6 + g) & 0xFFFFFFFF )) $(( (h7 + h) & 0xFFFFFFFF ))
+    _sha256_out[0]=$(( (h0 + a) & 0xFFFFFFFF ))
+    _sha256_out[1]=$(( (h1 + b) & 0xFFFFFFFF ))
+    _sha256_out[2]=$(( (h2 + c) & 0xFFFFFFFF ))
+    _sha256_out[3]=$(( (h3 + d) & 0xFFFFFFFF ))
+    _sha256_out[4]=$(( (h4 + e) & 0xFFFFFFFF ))
+    _sha256_out[5]=$(( (h5 + f) & 0xFFFFFFFF ))
+    _sha256_out[6]=$(( (h6 + g) & 0xFFFFFFFF ))
+    _sha256_out[7]=$(( (h7 + h) & 0xFFFFFFFF ))
 }
 
 # sha256 <hex_message> - Compute SHA-256 hash of hex-encoded message
@@ -100,18 +90,18 @@ sha256() {
         msg="${msg}00"
     done
     # Append 64-bit big-endian message length in bits
-    msg="${msg}$(printf '%016x' "$msg_len_bits")"
+    local _len_hex
+    printf -v _len_hex '%016x' "$msg_len_bits"
+    msg="${msg}${_len_hex}"
 
     # Process each 64-byte (128 hex char) block
     local offset=0
     local total=${#msg}
     while [ $offset -lt "$total" ]; do
         local block="${msg:$offset:128}"
-        local result
-        result=$(_sha256_compress "$block" "$h0" "$h1" "$h2" "$h3" "$h4" "$h5" "$h6" "$h7")
-        # shellcheck disable=SC2086
-        set -- $result
-        h0=$1 h1=$2 h2=$3 h3=$4 h4=$5 h5=$6 h6=$7 h7=$8
+        _sha256_compress "$block" "$h0" "$h1" "$h2" "$h3" "$h4" "$h5" "$h6" "$h7"
+        h0=${_sha256_out[0]}; h1=${_sha256_out[1]}; h2=${_sha256_out[2]}; h3=${_sha256_out[3]}
+        h4=${_sha256_out[4]}; h5=${_sha256_out[5]}; h6=${_sha256_out[6]}; h7=${_sha256_out[7]}
         offset=$((offset + 128))
     done
 

@@ -27,7 +27,7 @@ JIT_MODE="${1:-nojit}"
 if [ "$JIT_MODE" = "jit" ]; then
     . "$SRC_DIR/util/jit.sh"
     _jit_mark_inlinable uint8_to_hex uint16_to_hex uint24_to_hex uint32_to_hex ascii_to_hex
-    _jit_inline hkdf_expand_label _tls_build_client_hello hmac_sha256 hex_xor hkdf_expand
+    _jit_inline hkdf_expand_label _tls_build_client_hello hkdf_expand
     printf '=== Benchmark: JIT ENABLED ===\n'
 else
     printf '=== Benchmark: NO JIT (baseline) ===\n'

@@ -2,19 +2,15 @@
 # gcm.sh - AES-128-GCM (Galois Counter Mode)
 # Reference: NIST SP 800-38D, McGrew & Viega GCM spec
 # Requires: aes.sh
-
-# GCM operates on 128-bit (16-byte) blocks.
-# The GHASH field is GF(2^128) with polynomial x^128 + x^7 + x^2 + x + 1.
-# We represent 128-bit values as 4 x 32-bit integers (big-endian word order).
+#
+# All internal functions return results via globals to avoid subshell forks.
 
 # _gcm_gf_mult <a_hex_32> <b_hex_32> - GF(2^128) multiplication
-# Both inputs are 32-char hex strings (16 bytes).
-# Returns 32-char hex string.
+# Result stored in _gcm_gf_result (32-char hex string).
 _gcm_gf_mult() {
     local a_hex="$1"
     local b_hex="$2"
 
-    # Parse a and b into 4 x 32-bit words each
     local a0=$((16#${a_hex:0:8}))
     local a1=$((16#${a_hex:8:8}))
     local a2=$((16#${a_hex:16:8}))
@@ -27,7 +23,6 @@ _gcm_gf_mult() {
 
     local z0=0 z1=0 z2=0 z3=0
 
-    # For each bit of a (128 bits total, MSB first)
     local w=0
     while [ $w -lt 4 ]; do
         local a_word
@@ -42,14 +37,12 @@ _gcm_gf_mult() {
                 z2=$((z2 ^ v2))
                 z3=$((z3 ^ v3))
             fi
-            # Shift V right by 1 (as 128-bit value), if LSB was set, XOR with R
             local lsb=$(( v3 & 1 ))
             v3=$(( ((v3 >> 1) | ((v2 & 1) << 31)) & 0xFFFFFFFF ))
             v2=$(( ((v2 >> 1) | ((v1 & 1) << 31)) & 0xFFFFFFFF ))
             v1=$(( ((v1 >> 1) | ((v0 & 1) << 31)) & 0xFFFFFFFF ))
             v0=$(( (v0 >> 1) & 0xFFFFFFFF ))
             if [ $lsb -ne 0 ]; then
-                # R = 0xE1000000 00000000 00000000 00000000
                 v0=$((v0 ^ 0xE1000000))
             fi
             bit=$((bit - 1))
@@ -57,15 +50,13 @@ _gcm_gf_mult() {
         w=$((w + 1))
     done
 
-    printf '%08x%08x%08x%08x' \
+    printf -v _gcm_gf_result '%08x%08x%08x%08x' \
         $((z0 & 0xFFFFFFFF)) $((z1 & 0xFFFFFFFF)) \
         $((z2 & 0xFFFFFFFF)) $((z3 & 0xFFFFFFFF))
 }
 
 # _gcm_ghash <h_hex> <data_hex> - GHASH function
-# H is the hash subkey (16 bytes hex). Data is arbitrary length hex (must be
-# multiple of 16 bytes, caller pads if needed).
-# Returns 16-byte hex string.
+# Result stored in _gcm_ghash_result (32-char hex string).
 _gcm_ghash() {
     local h="$1"
     local data="$2"
@@ -74,29 +65,29 @@ _gcm_ghash() {
     local i=0
     while [ $i -lt "$len" ]; do
         local block="${data:$i:32}"
-        # Pad block to 16 bytes if needed
         while [ ${#block} -lt 32 ]; do
             block="${block}00"
         done
         y=$(hex_xor "$y" "$block")
-        y=$(_gcm_gf_mult "$y" "$h")
+        _gcm_gf_mult "$y" "$h"
+        y="$_gcm_gf_result"
         i=$((i + 32))
     done
-    printf '%s' "$y"
+    _gcm_ghash_result="$y"
 }
 
-# _gcm_inc32 <counter_hex_32> - Increment the rightmost 32 bits of a 128-bit counter
+# _gcm_inc32 <counter_hex_32> - Increment the rightmost 32 bits
+# Result stored in _gcm_inc32_result.
 _gcm_inc32() {
     local ctr="$1"
-    local left="${ctr:0:24}"  # Upper 96 bits (24 hex chars)
-    local right=$((16#${ctr:24:8}))  # Lower 32 bits
+    local left="${ctr:0:24}"
+    local right=$((16#${ctr:24:8}))
     right=$(( (right + 1) & 0xFFFFFFFF ))
-    printf '%s%08x' "$left" "$right"
+    printf -v _gcm_inc32_result '%s%08x' "$left" "$right"
 }
 
 # _gcm_gctr <icb_hex> <plaintext_hex> - GCTR function (CTR mode encryption)
-# ICB is initial counter block (16 bytes hex).
-# Returns ciphertext hex of same length as plaintext.
+# Result stored in _gcm_gctr_result.
 _gcm_gctr() {
     local cb="$1"
     local pt="$2"
@@ -109,20 +100,17 @@ _gcm_gctr() {
         local block_len=${#block}
         local encrypted_cb
         encrypted_cb=$(aes128_encrypt_block "$cb")
-        # XOR only the bytes we have (handles partial last block)
         local xored
         xored=$(hex_xor "$encrypted_cb" "$block")
-        # Truncate to actual block length
         result="${result}${xored:0:$block_len}"
-        cb=$(_gcm_inc32 "$cb")
+        _gcm_inc32 "$cb"
+        cb="$_gcm_inc32_result"
         i=$((i + 32))
     done
-    printf '%s' "$result"
+    _gcm_gctr_result="$result"
 }
 
 # gcm_encrypt <key_hex> <iv_hex> <plaintext_hex> <aad_hex>
-# AES-128-GCM authenticated encryption.
-# Key: 32 hex chars (16 bytes). IV: 24 hex chars (12 bytes, standard).
 # Returns: ciphertext_hex followed by 32-char tag_hex, separated by space.
 gcm_encrypt() {
     local key="$1"
@@ -132,65 +120,54 @@ gcm_encrypt() {
 
     aes128_expand_key "$key"
 
-    # Compute H = AES_K(0^128)
     local h
     h=$(aes128_encrypt_block "00000000000000000000000000000000")
 
-    # Compute J0 (initial counter)
     local j0
     if [ ${#iv} -eq 24 ]; then
-        # 96-bit IV: J0 = IV || 0^31 || 1
         j0="${iv}00000001"
     else
-        # Non-96-bit IV: J0 = GHASH_H(IV || pad || len64)
-        # Not implemented (96-bit IV is standard for TLS)
         printf 'ERROR: only 96-bit IV supported\n' >&2
         return 1
     fi
 
-    # Encrypt plaintext with GCTR (starting from inc32(J0))
-    local cb
-    cb=$(_gcm_inc32 "$j0")
+    _gcm_inc32 "$j0"
+    local cb="$_gcm_inc32_result"
     local ct=""
     if [ -n "$pt" ]; then
-        ct=$(_gcm_gctr "$cb" "$pt")
+        _gcm_gctr "$cb" "$pt"
+        ct="$_gcm_gctr_result"
     fi
 
-    # Compute GHASH over AAD and CT
-    # Build: AAD || pad_to_128(AAD) || CT || pad_to_128(CT) || len(AAD)_64 || len(CT)_64
     local aad_bits=$(( ${#aad} * 4 ))
     local ct_bits=$(( ${#ct} * 4 ))
 
     local ghash_input=""
-    # AAD padded to 128-bit boundary
     if [ -n "$aad" ]; then
         ghash_input="$aad"
         while [ $(( ${#ghash_input} % 32 )) -ne 0 ]; do
             ghash_input="${ghash_input}00"
         done
     fi
-    # CT padded to 128-bit boundary
     if [ -n "$ct" ]; then
         ghash_input="${ghash_input}${ct}"
         while [ $(( ${#ghash_input} % 32 )) -ne 0 ]; do
             ghash_input="${ghash_input}00"
         done
     fi
-    # Append lengths (each 64-bit big-endian)
-    ghash_input="${ghash_input}$(printf '%016x%016x' "$aad_bits" "$ct_bits")"
+    local _gcm_len_tmp
+    printf -v _gcm_len_tmp '%016x%016x' "$aad_bits" "$ct_bits"
+    ghash_input="${ghash_input}${_gcm_len_tmp}"
 
-    local s
-    s=$(_gcm_ghash "$h" "$ghash_input")
+    _gcm_ghash "$h" "$ghash_input"
 
-    # Tag = GCTR_K(J0, S) -- encrypt S with counter J0
-    local tag
-    tag=$(_gcm_gctr "$j0" "$s")
+    _gcm_gctr "$j0" "$_gcm_ghash_result"
+    local tag="${_gcm_gctr_result:0:32}"
 
-    printf '%s %s' "$ct" "${tag:0:32}"
+    printf '%s %s' "$ct" "$tag"
 }
 
 # gcm_decrypt <key_hex> <iv_hex> <ciphertext_hex> <aad_hex> <tag_hex>
-# AES-128-GCM authenticated decryption.
 # Returns plaintext hex on success, exits with error if tag mismatch.
 gcm_decrypt() {
     local key="$1"
@@ -212,7 +189,6 @@ gcm_decrypt() {
         return 1
     fi
 
-    # Verify tag first: compute GHASH over AAD and CT
     local aad_bits=$(( ${#aad} * 4 ))
     local ct_bits=$(( ${#ct} * 4 ))
 
@@ -229,25 +205,25 @@ gcm_decrypt() {
             ghash_input="${ghash_input}00"
         done
     fi
-    ghash_input="${ghash_input}$(printf '%016x%016x' "$aad_bits" "$ct_bits")"
+    local _gcm_len_tmp
+    printf -v _gcm_len_tmp '%016x%016x' "$aad_bits" "$ct_bits"
+    ghash_input="${ghash_input}${_gcm_len_tmp}"
 
-    local s
-    s=$(_gcm_ghash "$h" "$ghash_input")
-    local computed_tag
-    computed_tag=$(_gcm_gctr "$j0" "$s")
-    computed_tag="${computed_tag:0:32}"
+    _gcm_ghash "$h" "$ghash_input"
+    _gcm_gctr "$j0" "$_gcm_ghash_result"
+    local computed_tag="${_gcm_gctr_result:0:32}"
 
     if [ "$computed_tag" != "$expected_tag" ]; then
         printf 'ERROR: GCM tag mismatch\n' >&2
         return 1
     fi
 
-    # Decrypt ciphertext
-    local cb
-    cb=$(_gcm_inc32 "$j0")
+    _gcm_inc32 "$j0"
+    local cb="$_gcm_inc32_result"
     local pt=""
     if [ -n "$ct" ]; then
-        pt=$(_gcm_gctr "$cb" "$ct")
+        _gcm_gctr "$cb" "$ct"
+        pt="$_gcm_gctr_result"
     fi
     printf '%s' "$pt"
 }

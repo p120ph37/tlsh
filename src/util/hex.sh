@@ -29,14 +29,17 @@ hex_xor() {
     [ ${#b} -lt "$len" ] && len=${#b}
     local result=""
     local i=0
+    local _xor_tmp
     # Process 4 bytes at a time (8 hex chars = 32 bits)
     while [ $((i + 8)) -le "$len" ]; do
-        result="${result}$(printf '%08x' $(( (16#${a:$i:8}) ^ (16#${b:$i:8}) )))"
+        printf -v _xor_tmp '%08x' $(( (16#${a:$i:8}) ^ (16#${b:$i:8}) ))
+        result="${result}${_xor_tmp}"
         i=$((i + 8))
     done
     # Handle remaining bytes one at a time
     while [ $i -lt "$len" ]; do
-        result="${result}$(printf '%02x' $(( (16#${a:$i:2}) ^ (16#${b:$i:2}) )))"
+        printf -v _xor_tmp '%02x' $(( (16#${a:$i:2}) ^ (16#${b:$i:2}) ))
+        result="${result}${_xor_tmp}"
         i=$((i + 2))
     done
     printf '%s' "$result"
@@ -84,7 +87,9 @@ bytes_to_hex() {
         if [ -z "$byte" ]; then
             result="${result}00"
         else
-            result="${result}$(printf '%02x' "'$byte")"
+            local _btoh_tmp
+            printf -v _btoh_tmp '%02x' "'$byte"
+            result="${result}${_btoh_tmp}"
         fi
         i=$((i + 1))
     done
