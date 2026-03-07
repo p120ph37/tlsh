@@ -21,6 +21,7 @@ hex_substr() {
 
 # hex_xor <hex_a> <hex_b> - XOR two hex strings of equal length
 # Result is same length as inputs. If lengths differ, XORs up to shorter length.
+# Processes 4 bytes (8 hex chars) at a time for performance.
 hex_xor() {
     local a="$1"
     local b="$2"
@@ -28,10 +29,17 @@ hex_xor() {
     [ ${#b} -lt "$len" ] && len=${#b}
     local result=""
     local i=0
+    local _xor_tmp
+    # Process 4 bytes at a time (8 hex chars = 32 bits)
+    while [ $((i + 8)) -le "$len" ]; do
+        printf -v _xor_tmp '%08x' $(( (16#${a:$i:8}) ^ (16#${b:$i:8}) ))
+        result="${result}${_xor_tmp}"
+        i=$((i + 8))
+    done
+    # Handle remaining bytes one at a time
     while [ $i -lt "$len" ]; do
-        local byte_a=$((16#${a:$i:2}))
-        local byte_b=$((16#${b:$i:2}))
-        result="${result}$(printf '%02x' $(( byte_a ^ byte_b )))"
+        printf -v _xor_tmp '%02x' $(( (16#${a:$i:2}) ^ (16#${b:$i:2}) ))
+        result="${result}${_xor_tmp}"
         i=$((i + 2))
     done
     printf '%s' "$result"
@@ -79,7 +87,9 @@ bytes_to_hex() {
         if [ -z "$byte" ]; then
             result="${result}00"
         else
-            result="${result}$(printf '%02x' "'$byte")"
+            local _btoh_tmp
+            printf -v _btoh_tmp '%02x' "'$byte"
+            result="${result}${_btoh_tmp}"
         fi
         i=$((i + 1))
     done

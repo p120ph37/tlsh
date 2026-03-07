@@ -30,7 +30,7 @@ hkdf_expand() {
 
     while [ $i -le "$n" ]; do
         local counter
-        counter=$(printf '%02x' "$i")
+        printf -v counter '%02x' "$i"
         t=$(hmac_sha256 "$prk" "${t}${info}${counter}")
         okm="${okm}${t}"
         i=$((i + 1))
@@ -59,12 +59,12 @@ hkdf_expand_label() {
     local label_len=$(( ${#label_hex} / 2 ))
     local context_len=$(( ${#context} / 2 ))
 
-    local hkdf_label=""
-    hkdf_label="${hkdf_label}$(uint16_to_hex "$length")"
-    hkdf_label="${hkdf_label}$(uint8_to_hex "$label_len")"
-    hkdf_label="${hkdf_label}${label_hex}"
-    hkdf_label="${hkdf_label}$(uint8_to_hex "$context_len")"
-    hkdf_label="${hkdf_label}${context}"
+    local _hel_u16 _hel_u8a _hel_u8b
+    printf -v _hel_u16 '%04x' "$(( length & 0xFFFF ))"
+    printf -v _hel_u8a '%02x' "$(( label_len & 0xFF ))"
+    printf -v _hel_u8b '%02x' "$(( context_len & 0xFF ))"
+
+    local hkdf_label="${_hel_u16}${_hel_u8a}${label_hex}${_hel_u8b}${context}"
 
     hkdf_expand "$secret" "$hkdf_label" "$length"
 }

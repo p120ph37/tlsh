@@ -379,7 +379,7 @@ _mgf1_sha256() {
     local counter=0
     while [ $(( ${#result} / 2 )) -lt "$out_len" ]; do
         local c_hex
-        c_hex=$(uint32_to_hex "$counter")
+        printf -v c_hex '%08x' "$(( counter & 0xFFFFFFFF ))"
         result="${result}$(sha256 "${seed}${c_hex}")"
         counter=$((counter + 1))
     done
